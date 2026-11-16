@@ -1,0 +1,242 @@
+#!/bin/sh
+# nfc-wifi-sync: NXP NTAG 5 (0x54 on /dev/i2c-0) Multi-Mode NDEF Controller
+# Reads /etc/config/nfc by default or accepts CLI overrides:
+#   nfc-wifi-sync --wifi [ssid enc key]
+#   nfc-wifi-sync --url "https://..."
+#   nfc-wifi-sync --status
+#   nfc-wifi-sync --vcard ["Name" "URL1" "URL2" "Note"]
+#   nfc-wifi-sync --text "Custom text..."
+#   nfc-wifi-sync --dump
+
+ntag_init() {
+	i2ctransfer -y 0 w5@0x54 0x10 0xA1 0x00 0xFF 0x0C 2>/dev/null
+	i2ctransfer -y 0 w5@0x54 0x10 0xA1 0x01 0x0F 0x01 2>/dev/null
+	i2ctransfer -y 0 w6@0x54 0x00 0x00 0xE1 0x40 0x80 0x09 2>/dev/null
+}
+
+ntag_write_stream() {
+	ALL_HEX="$1"
+	set -- $ALL_HEX
+	BLK=1
+	while [ $# -ge 4 ]; do
+		B0=$1; B1=$2; B2=$3; B3=$4
+		shift 4
+		BH=$(printf "0x%02x" $(( (BLK >> 8) & 0xFF )))
+		BL=$(printf "0x%02x" $(( BLK & 0xFF )))
+		i2ctransfer -y 0 w6@0x54 "$BH" "$BL" "$B0" "$B1" "$B2" "$B3"
+		BLK=$((BLK + 1))
+		case "$B0 $B1 $B2 $B3" in
+			*0xfe*) break ;;
+		esac
+	done
+	LAST_BLK=$((BLK - 1))
+}
+
+write_url() {
+	URL="$1"
+	PREFIX=0x00
+	BODY="$URL"
+	case "$URL" in
+		http://www.*)  PREFIX=0x01; BODY="${URL#http://www.}" ;;
+		https://www.*) PREFIX=0x02; BODY="${URL#https://www.}" ;;
+		http://*)      PREFIX=0x03; BODY="${URL#http://}" ;;
+		https://*)     PREFIX=0x04; BODY="${URL#https://}" ;;
+	esac
+
+	ntag_init
+	BODY_LEN=${#BODY}
+	PAYLOAD_LEN=$((1 + BODY_LEN))
+	NDEF_LEN=$((4 + PAYLOAD_LEN))
+
+	HEX_BYTES=$(printf "0x03 0x%02x 0xd1 0x01 0x%02x 0x55 0x%02x " "$NDEF_LEN" "$PAYLOAD_LEN" "$((PREFIX))")
+	BODY_HEX=$(printf "%s" "$BODY" | hexdump -v -e '1/1 "0x%02x "')
+	ntag_write_stream "$HEX_BYTES $BODY_HEX 0xfe 0x00 0x00 0x00"
+	MSG="URL: $URL ($LAST_BLK blok)"
+	echo "$MSG" > /tmp/.nfc_last_sync
+	echo "nfc-wifi-sync: synced URL='$URL' (prefix=$PREFIX, $LAST_BLK blocks) to NTAG5"
+}
+
+write_text() {
+	TEXT=$(printf "%s" "$1" | cut -c 1-200)
+	ntag_init
+	TEXT_LEN=${#TEXT}
+	PAYLOAD_LEN=$((3 + TEXT_LEN))
+	NDEF_LEN=$((4 + PAYLOAD_LEN))
+
+	HEX_BYTES=$(printf "0x03 0x%02x 0xd1 0x01 0x%02x 0x54 0x02 0x74 0x72 " "$NDEF_LEN" "$PAYLOAD_LEN")
+	BODY_HEX=$(printf "%s" "$TEXT" | hexdump -v -e '1/1 "0x%02x "')
+	ntag_write_stream "$HEX_BYTES $BODY_HEX 0xfe 0x00 0x00 0x00"
+	MSG="Metin ($TEXT_LEN karakter, $LAST_BLK blok)"
+	echo "$MSG" > /tmp/.nfc_last_sync
+	echo "nfc-wifi-sync: synced TEXT ($TEXT_LEN chars, $LAST_BLK blocks) to NTAG5:"
+	echo "$TEXT"
+}
+
+write_status() {
+	CSQ_RAW=$(/usr/bin/sms_tool_q -d /dev/ttyUSB1 at "AT+CSQ" 2>/dev/null | awk -F': ' '/\+CSQ:/{split($2,a,","); print a[1]; exit}')
+	if [ -n "$CSQ_RAW" ] && [ "$CSQ_RAW" -le 31 ] 2>/dev/null; then
+		RSSI=$(( -113 + (CSQ_RAW * 2) ))
+		PCT=$(( (CSQ_RAW * 100) / 31 ))
+	else
+		RSSI="?"
+		PCT="?"
+	fi
+
+	WAN_IP=$(ip -4 addr show wwan0 2>/dev/null | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')
+	[ -z "$WAN_IP" ] && WAN_IP="Yok"
+
+	RAM_INFO=$(free | awk '/Mem:/{printf "%d/%dMB", int($3/1024), int($2/1024)}')
+	UP_MIN=$(awk '{printf "%ddk", int($1/60)}' /proc/uptime)
+
+	SMS_RAW=$(sms_tool_q -d /dev/ttyUSB2 recv 2>/dev/null | tail -n 8)
+	SMS_FROM=$(echo "$SMS_RAW" | awk -F': ' '/^From:/{print $2; exit}')
+	SMS_DATE=$(echo "$SMS_RAW" | awk -F': ' '/^Date\/Time:/{print $2; exit}')
+	if [ -n "$SMS_FROM" ]; then
+		SMS_LINE="Son SMS: $SMS_FROM ($SMS_DATE)"
+	else
+		SMS_LINE="Son SMS: Yok"
+	fi
+
+	STATUS_TEXT=$(printf "ZTE MF297D [Turkcell 4G+]\nSinyal: %%%s (%sdBm)\nIP: %s | Up: %s\nRAM: %s\n%s" \
+		"$PCT" "$RSSI" "$WAN_IP" "$UP_MIN" "$RAM_INFO" "$SMS_LINE")
+
+	write_text "$STATUS_TEXT"
+	echo "Canli 4G Özeti (Sinyal %${PCT}, IP ${WAN_IP})" > /tmp/.nfc_last_sync
+}
+
+write_vcard() {
+	V_NAME="${1:-Omer (laserbirdx)}"
+	V_URL1="${2:-https://t.me/LaserbirdsLogs}"
+	V_URL2="${3:-https://github.com/laserbirdx}"
+	V_NOTE="${4:-Embedded Linux | OpenWrt | 5G/LTE}"
+
+	VCARD=$(printf "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:%s\r\nURL:%s\r\nURL:%s\r\nNOTE:%s\r\nEND:VCARD" \
+		"$V_NAME" "$V_URL1" "$V_URL2" "$V_NOTE")
+
+	ntag_init
+	VCARD_LEN=${#VCARD}
+	NDEF_LEN=$((3 + 10 + VCARD_LEN))
+
+	MIME_HEX=$(printf "text/vcard" | hexdump -v -e '1/1 "0x%02x "')
+	HEX_BYTES=$(printf "0x03 0x%02x 0xd2 0x0a 0x%02x %s " "$NDEF_LEN" "$VCARD_LEN" "$MIME_HEX")
+	BODY_HEX=$(printf "%s" "$VCARD" | hexdump -v -e '1/1 "0x%02x "')
+	ntag_write_stream "$HEX_BYTES $BODY_HEX 0xfe 0x00 0x00 0x00"
+	echo "vCard: $V_NAME ($LAST_BLK blok)" > /tmp/.nfc_last_sync
+	echo "nfc-wifi-sync: synced vCard '$V_NAME' ($VCARD_LEN bytes, $LAST_BLK blocks) to NTAG5"
+}
+
+write_wifi_uci() {
+	IFACE=$(uci -q get nfc.main.wifi_iface)
+	[ -z "$IFACE" ] && IFACE="default_radio1"
+	if [ "$IFACE" = "custom" ]; then
+		SSID=$(uci -q get nfc.main.custom_ssid)
+		ENC=$(uci -q get nfc.main.custom_enc)
+		KEY=$(uci -q get nfc.main.custom_key)
+	else
+		SSID=$(uci -q get wireless.${IFACE}.ssid)
+		ENC=$(uci -q get wireless.${IFACE}.encryption)
+		KEY=$(uci -q get wireless.${IFACE}.key)
+		if [ -z "$SSID" ]; then
+			SSID=$(uci -q get wireless.default_radio0.ssid)
+			ENC=$(uci -q get wireless.default_radio0.encryption)
+			KEY=$(uci -q get wireless.default_radio0.key)
+		fi
+	fi
+	[ -z "$SSID" ] && SSID="ZTE MF297D"
+	[ -z "$ENC" ] && ENC="none"
+	OUT=$(/usr/bin/nfc-wifi-sync.bin "$SSID" "$ENC" "$KEY" 2>&1)
+	RET=$?
+	echo "Wi-Fi: SSID='$SSID' ($ENC)" > /tmp/.nfc_last_sync
+	echo "$OUT"
+	return $RET
+}
+
+dump_chip() {
+	BLK0=$(i2ctransfer -y 0 w2@0x54 0x00 0x00 r4 2>/dev/null)
+	if [ -z "$BLK0" ]; then
+		echo "CHIP_STATUS=OFFLINE"
+		exit 1
+	fi
+	MODE=$(uci -q get nfc.main.mode)
+	[ -z "$MODE" ] && MODE="wifi"
+	LAST=$(cat /tmp/.nfc_last_sync 2>/dev/null)
+	[ -z "$LAST" ] && LAST="Wi-Fi (Varsayilan)"
+	echo "CHIP_STATUS=ONLINE (NXP NTAG 5 @ /dev/i2c-0, 0x54)"
+	echo "ACTIVE_MODE=$MODE"
+	echo "LAST_SYNC=$LAST"
+	for b in 0 1 2 3 4 5 6 7; do
+		printf "Block %02d: " "$b"
+		i2ctransfer -y 0 w2@0x54 0x00 "$b" r4 2>/dev/null
+	done
+}
+
+case "$1" in
+	--dump)
+		dump_chip
+		;;
+	--url)
+		shift
+		uci -q set nfc.main.mode='url'
+		uci -q set nfc.main.url="$1"
+		uci -q commit nfc
+		write_url "$1"
+		;;
+	--status)
+		uci -q set nfc.main.mode='status'
+		uci -q commit nfc
+		write_status
+		;;
+	--vcard)
+		shift
+		uci -q set nfc.main.mode='vcard'
+		[ -n "$1" ] && uci -q set nfc.main.vcard_name="$1"
+		[ -n "$2" ] && uci -q set nfc.main.vcard_url1="$2"
+		[ -n "$3" ] && uci -q set nfc.main.vcard_url2="$3"
+		[ -n "$4" ] && uci -q set nfc.main.vcard_note="$4"
+		uci -q commit nfc
+		write_vcard "${1:-$(uci -q get nfc.main.vcard_name)}" "${2:-$(uci -q get nfc.main.vcard_url1)}" "${3:-$(uci -q get nfc.main.vcard_url2)}" "${4:-$(uci -q get nfc.main.vcard_note)}"
+		;;
+	--text)
+		shift
+		uci -q set nfc.main.mode='text'
+		uci -q set nfc.main.text="$1"
+		uci -q commit nfc
+		write_text "$1"
+		;;
+	--wifi)
+		shift
+		uci -q set nfc.main.mode='wifi'
+		uci -q commit nfc
+		if [ $# -ge 1 ]; then
+			/usr/bin/nfc-wifi-sync.bin "$@"
+			echo "Wi-Fi: SSID='$1'" > /tmp/.nfc_last_sync
+		else
+			write_wifi_uci
+		fi
+		;;
+	"")
+		ENABLED=$(uci -q get nfc.main.enabled)
+		[ "$ENABLED" = "0" ] && exit 0
+		MODE=$(uci -q get nfc.main.mode)
+		case "$MODE" in
+			url)
+				write_url "$(uci -q get nfc.main.url)"
+				;;
+			status)
+				write_status
+				;;
+			vcard)
+				write_vcard "$(uci -q get nfc.main.vcard_name)" "$(uci -q get nfc.main.vcard_url1)" "$(uci -q get nfc.main.vcard_url2)" "$(uci -q get nfc.main.vcard_note)"
+				;;
+			text)
+				write_text "$(uci -q get nfc.main.text)"
+				;;
+			*)
+				write_wifi_uci
+				;;
+		esac
+		;;
+	*)
+		exec /usr/bin/nfc-wifi-sync.bin "$@"
+		;;
+esac

@@ -197,6 +197,24 @@ sms_tool -d /dev/ttyUSB1 at "AT+COPS?"
 sms_tool -d /dev/ttyUSB1 recv
 ```
 
+## Device Tree (DTB / DTS)
+
+Extracted Device Tree files are located in [`dtb/`](dtb/):
+
+- [`dtb/qcom-ipq5018-zte-mf297d.dtb`](dtb/qcom-ipq5018-zte-mf297d.dtb) — OpenWrt Linux 6.18 compiled DTB
+- [`dtb/qcom-ipq5018-zte-mf297d.dts`](dtb/qcom-ipq5018-zte-mf297d.dts) — Decompiled OpenWrt DTS
+- [`dtb/stock-qsdk-mp03_3.dtb`](dtb/stock-qsdk-mp03_3.dtb) — Stock QSDK 4.4.60 DTB (`MF297D-AP-MP03.3`)
+
+## NFC Tag (NXP NTAG 5)
+
+The front-panel NXP NTAG 5 (`0x54` on `/dev/i2c-0`) can be controlled from LuCI or CLI via `luci-app-mf297d-nfc` (source files in [`nfc-tag/`](nfc-tag/), installable package in [`packages/`](packages/)):
+
+```sh
+apk add --allow-untrusted packages/luci-app-mf297d-nfc-1.0.0-r1.apk
+```
+
+Supported NDEF modes: Wi-Fi auto-connect (WFA WSC), URI/URL, live 4G status summary, vCard, and custom text (`Services -> NFC Tag (NTAG 5)`).
+
 ## License
 
 [GPL-2.0](LICENSE), the same as OpenWrt and the Linux kernel.

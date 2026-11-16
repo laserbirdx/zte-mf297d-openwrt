@@ -1,0 +1,19 @@
+{
+	"luci-app-mf297d-nfc": {
+		"description": "Grant UCI and NFC I2C tool access for ZTE MF297D NFC Tag",
+		"read": {
+			"uci": [ "nfc", "wireless" ],
+			"file": {
+				"/usr/bin/nfc-wifi-sync": [ "exec" ],
+				"/etc/init.d/nfc": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "nfc" ],
+			"file": {
+				"/usr/bin/nfc-wifi-sync": [ "exec" ],
+				"/etc/init.d/nfc": [ "exec" ]
+			}
+		}
+	}
+}

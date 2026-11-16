@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+
+START=98
+USE_PROCD=1
+
+start_service() {
+	/usr/bin/nfc-wifi-sync >/dev/null 2>&1 &
+}
+
+reload_service() {
+	/usr/bin/nfc-wifi-sync >/dev/null 2>&1 &
+}
+
+service_triggers() {
+	procd_add_reload_trigger "nfc" "wireless"
+}

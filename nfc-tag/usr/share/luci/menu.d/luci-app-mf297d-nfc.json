@@ -1,0 +1,14 @@
+{
+	"admin/services/nfc": {
+		"title": "NFC Tag (NTAG 5)",
+		"order": 50,
+		"action": {
+			"type": "view",
+			"path": "nfc/config"
+		},
+		"depends": {
+			"acl": [ "luci-app-mf297d-nfc" ],
+			"uci": { "nfc": true }
+		}
+	}
+}

@@ -2,6 +2,8 @@
 
 # OpenWrt for ZTE MF297D
 
+![OpenWrt: Custom Port](https://img.shields.io/badge/OpenWrt-Custom%20Port-00B5E2?logo=openwrt&logoColor=white) ![SoC: Qualcomm IPQ5018](https://img.shields.io/badge/SoC-Qualcomm%20IPQ5018-3253DC?logo=qualcomm&logoColor=white) ![Wi-Fi / WAN: Wi-Fi 6 + LTE-A](https://img.shields.io/badge/Wi--Fi%20%2F%20WAN-Wi--Fi%206%20%2B%20LTE--A-success) ![license: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue)
+
 OpenWrt port for the ZTE MF297D 4G LTE-A Wi-Fi 6 router (Qualcomm IPQ5018).
 Both radios, all four Gigabit Ethernet ports, the built-in LTE modem, buttons,
 correct MAC addresses and persistent installation to NAND via sysupgrade all work.
